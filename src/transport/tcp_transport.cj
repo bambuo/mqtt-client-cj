@@ -33,11 +33,28 @@ public class TcpTransport <: Transport {
 
             // TLS 握手（如果启用）
             if (useTls) {
-                let tlsClientConfig = TlsClientConfig()
+                var tlsClientConfig = TlsClientConfig()
 
-                let tls = TlsSocket.client(sock, clientConfig: tlsClientConfig)
-                tls.handshake()
-                tlsSocket = Some(tls)
+                // 应用 SNI 服务器名
+                if (tlsConfig.serverName.isSome()) {
+                    tlsClientConfig.serverName = Some(tlsConfig.serverName.getOrThrow())
+                }
+
+                // 注意：自定义 CA 证书和客户端证书需要 stdx.crypto.x509 的 PEM 解析能力，
+                // 目前静态库中不包含相应实现，保持默认（系统 CA 证书链）。
+                // 如需自定义 CA，可通过 verifyMode 设置 TrustAll（测试环境）或 Default（生产环境）。
+
+                let tlsResult = try {
+                    let tls = TlsSocket.client(sock, clientConfig: tlsClientConfig)
+                    tls.handshake()
+                    Some(tls)
+                } catch (e: Exception) {
+                    // TLS 握手失败时关闭底层 TCP 连接，避免资源泄漏
+                    try { sock.close() } catch (_: Exception) {}
+                    socket = None
+                    throw e
+                }
+                tlsSocket = tlsResult
                 println("TLS 握手成功")
             }
 
@@ -112,6 +129,7 @@ public class TcpTransport <: Transport {
                     if (isRunning) {
                         println("接收错误: " + e.message)
                     }
+                    isRunning = false
                     break
                 }
             }

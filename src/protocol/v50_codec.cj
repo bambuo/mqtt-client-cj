@@ -8,8 +8,6 @@
 
 package mqtt.protocol
 
-import std.collection.*
-
 public class V50Codec <: ProtocolCodec {
 
     // ==================== Hooks（基类模板方法调用） ====================
@@ -34,8 +32,19 @@ public class V50Codec <: ProtocolCodec {
         buf.writeAll(propsData)
     }
 
-    public override func writeSubscribeProperties(buf: ByteArrayOutputStream): Unit {
-        buf.write(0)  // Properties Length = 0
+    public override func writeSubscribeProperties(buf: ByteArrayOutputStream, properties: MqttProperties): Unit {
+        let propsData = properties.encode()
+        if (propsData.size > 0) {
+            writeVariableByteInteger(buf, propsData.size)
+            buf.writeAll(propsData)
+        } else {
+            buf.write(0)  // Properties Length = 0
+        }
+    }
+
+    // v5.0：Subscription Options 字节，QoS 在 bits 2-1，bit0 reserved=0（MQTT-3.8.3.1）
+    public override func encodeSubscriptionOptions(sub: Subscription): UInt8 {
+        return UInt8(qosToInt(sub.qos) << 1)
     }
 
     public override func writeUnsubscribeProperties(buf: ByteArrayOutputStream): Unit {
@@ -52,6 +61,28 @@ public class V50Codec <: ProtocolCodec {
             }
         }
         return properties
+    }
+
+    /// v5.0 CONNACK：正确解析 Reason Code（可能为 128-159），
+    /// 同时保留 v3.1.1 兼容的 returnCode 字段。
+    public override func parseConnAck(packet: MqttPacket): ConnAckResult {
+        let input = ByteArrayInputStream(packet.payload)
+        let flags = input.read()
+        // [MQTT-3.2.2-3] Acknowledge Flags bits 7-1 保留，必须为 0（v5.0 畸形包处理）
+        if ((flags & 0xFE) != 0) {
+            throw ProtocolError("CONNACK Acknowledge Flags reserved bits 7-1 must be 0")
+        }
+        let sessionPresent = (flags & 0x01) != 0
+        let reasonCodeValue = Int64(input.read())
+        let reasonCode = ReasonCode.fromInt(reasonCodeValue)
+        // v5.0 中 returnCode 字段仍尽量映射（0=ACCEPTED, 非0=映射最近似值）
+        let returnCode = if (reasonCodeValue == 0) {
+            ConnectReturnCode.ACCEPTED
+        } else {
+            ConnectReturnCode.SERVER_UNAVAILABLE
+        }
+        let properties = parseConnAckProperties(input, packet.payload.size)
+        return ConnAckResult(sessionPresent, returnCode, properties, reasonCode: reasonCode)
     }
 
     public override func parsePublishProperties(input: ByteArrayInputStream, totalSize: Int64): MqttProperties {
@@ -78,12 +109,18 @@ public class V50Codec <: ProtocolCodec {
 
     // ==================== 编码（独立实现） ====================
 
-    public override func encodeDisconnect(): Array<UInt8> {
+    public override func encodeDisconnect(reasonCode: ReasonCode, properties: MqttProperties): Array<UInt8> {
+        let buf = ByteArrayOutputStream()
+        buf.write(UInt8(reasonCode.toInt()))
+        let propsData = properties.encode()
+        writeVariableByteInteger(buf, propsData.size)
+        buf.writeAll(propsData)
+
+        let remaining = buf.size()
         let result = ByteArrayOutputStream()
         result.write(0xE0)
-        result.write(0x02)
-        result.write(0x00)  // Reason code (success)
-        result.write(0x00)  // Properties length
+        writeVariableByteInteger(result, remaining)
+        result.writeAll(buf.toByteArray())
         return result.toByteArray()
     }
 
@@ -96,7 +133,7 @@ public class V50Codec <: ProtocolCodec {
 
         let remaining = buf.size()
         let result = ByteArrayOutputStream()
-        result.write(0x1F)
+        result.write(0xF0)
         writeVariableByteInteger(result, remaining)
         result.writeAll(buf.toByteArray())
         return result.toByteArray()
@@ -133,18 +170,23 @@ public class V50Codec <: ProtocolCodec {
         let packetId = Int64(input.readShort())
         var success = true
         var properties = MqttProperties()
+
+        // v5.0 UNSUBACK 总是包含 Properties Length 字段
         if (input.getPosition() < packet.payload.size) {
             let propertiesLength = readVariableByteInteger(input)
             if (propertiesLength > 0) {
                 let propBytes = readRemainingBytes(input, propertiesLength)
                 properties = MqttProperties.decode(propBytes)
             }
+            // 剩余字节为 Reason Codes（每主题一个）
             let remaining = packet.payload.size - Int64(input.getPosition())
             for (i in 0..remaining) {
                 let code = input.read()
                 if (code >= UInt8(0x80)) { success = false }
             }
         }
+        // 注意：严格按照 v5.0 协议，UNSUBACK 至少应包含 Properties Length 字节。
+        // 若 payload 仅含 packetId（2 字节），说明是对端实现不完整，此处容错处理。
         return UnsubAckResult(packetId, success, properties)
     }
 

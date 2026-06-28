@@ -174,9 +174,13 @@ func testMessageStore() {
     let store = MessageStore()
     @Expect(store.size(), Int64(0))
 
-    let id1 = store.generatePacketId()
+    let id1Opt = store.generatePacketId()
+    @Expect(id1Opt.isSome(), true)
+    let id1 = id1Opt.getOrThrow()
     @Expect(id1, Int64(1))
-    let id2 = store.generatePacketId()
+    let id2Opt = store.generatePacketId()
+    @Expect(id2Opt.isSome(), true)
+    let id2 = id2Opt.getOrThrow()
     @Expect(id2, Int64(2))
 
     let data = Array<UInt8>(3, repeat: UInt8(0))

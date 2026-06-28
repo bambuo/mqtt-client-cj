@@ -1,9 +1,6 @@
 // MQTT 主题通配符匹配器
 package mqtt.protocol
 
-import std.convert.*
-import std.collection.*
-
 public class TopicMatcher {
     
     // 检查 topic 是否匹配 topicFilter
@@ -28,7 +25,10 @@ public class TopicMatcher {
                 // # 匹配剩余所有层级
                 return true
             } else if (filterPart == "+") {
-                // + 匹配一个层级
+                // + 匹配一个层级，但必须是非空层级（MQTT 规范要求）
+                if (topicParts[topicIndex].isEmpty()) {
+                    return false
+                }
                 topicIndex += 1
                 filterIndex += 1
             } else {
@@ -81,44 +81,5 @@ public class TopicMatcher {
     public static func isValidTopic(topic!: String): Bool {
         // topic 不能包含 # 或 +
         return !topic.contains("#") && !topic.contains("+")
-    }
-}
-
-// 单元测试
-public func testTopicMatcher(): Unit {
-    println("=== TopicMatcher 测试 ===")
-    
-    // 测试 1: 精确匹配
-    assert(TopicMatcher.matches(topic: "home/temp", topicFilter: "home/temp"), "精确匹配失败")
-    
-    // 测试 2: + 通配符
-    assert(TopicMatcher.matches(topic: "home/bedroom/temp", topicFilter: "home/+/temp"), "单级通配符失败")
-    assert(!TopicMatcher.matches(topic: "home/bedroom/1/temp", topicFilter: "home/+/temp"), "+ 匹配了多级")
-    
-    // 测试 3: # 通配符
-    assert(TopicMatcher.matches(topic: "home/temp", topicFilter: "home/#"), "多级通配符失败 (同级)")
-    assert(TopicMatcher.matches(topic: "home/bedroom/temp", topicFilter: "home/#"), "多级通配符失败 (多级)")
-    assert(TopicMatcher.matches(topic: "home", topicFilter: "home/#"), "多级通配符失败 (零级)")
-    
-    // 测试 4: 复杂匹配
-    assert(TopicMatcher.matches(topic: "a/b/c/d", topicFilter: "a/+/c/+"), "复杂匹配失败")
-    
-    // 测试 5: 不匹配的情况
-    assert(!TopicMatcher.matches(topic: "home/temp", topicFilter: "home/light"), "不应该匹配")
-    assert(!TopicMatcher.matches(topic: "home/bedroom/light", topicFilter: "home/+/temp"), "QoS 不匹配")
-    
-    // 测试 6: 验证 topic filter
-    assert(TopicMatcher.isValidTopicFilter(topicFilter: "home/+"), "合法 filter")
-    assert(TopicMatcher.isValidTopicFilter(topicFilter: "home/#"), "合法 filter")
-    assert(!TopicMatcher.isValidTopicFilter(topicFilter: "home/#/temp"), "# 不在末尾")
-    assert(!TopicMatcher.isValidTopicFilter(topicFilter: "home/a#"), "# 不在单独层级")
-    
-    println("✅ 所有测试通过!")
-}
-
-// 断言辅助函数
-private func assert(condition: Bool, message: String): Unit {
-    if (!condition) {
-        println("测试失败: ${message}")
     }
 }

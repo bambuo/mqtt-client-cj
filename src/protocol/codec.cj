@@ -68,14 +68,16 @@ public abstract class ProtocolCodec {
     }
 
     /// 编码 SUBSCRIBE 包（模板方法）
-    public func encodeSubscribe(subscriptions: Array<Subscription>, packetId: Int): Array<UInt8> {
+    public func encodeSubscribe(subscriptions: Array<Subscription>, packetId: Int,
+        properties!: MqttProperties = MqttProperties()): Array<UInt8> {
         let buf = ByteArrayOutputStream()
 
         buf.writeShort(UInt16(packetId))
-        writeSubscribeProperties(buf)
+        writeSubscribeProperties(buf, properties)
         for (sub in subscriptions) {
             writeString(buf, sub.topic)
-            buf.write(UInt8(qosToInt(sub.qos)))
+            // Subscription Options 字节：v3.1.1 为 QoS 原值，v5.0 QoS 在 bits 2-1、bit 0 保留为 0
+            buf.write(encodeSubscriptionOptions(sub))
         }
 
         let remaining = buf.size()
@@ -106,7 +108,7 @@ public abstract class ProtocolCodec {
 
     // ---- 按版本独立实现的编码方法 ----
 
-    public func encodeDisconnect(): Array<UInt8>
+    public open func encodeDisconnect(reasonCode: ReasonCode, properties: MqttProperties): Array<UInt8>
     public func encodeAuth(reasonCode: ReasonCode, properties: MqttProperties): Array<UInt8>
 
     // ---- 版本无关的编码方法 ----
@@ -117,7 +119,8 @@ public abstract class ProtocolCodec {
     }
 
     /// 编码 PUBACK 包（QoS 1 确认）
-    public func encodePubAck(packetId: Int): Array<UInt8> {
+    /// v5.0：RL=2 即 Success（无 Reason Code 无 Properties），合法 v5.0 编码
+    public open func encodePubAck(packetId: Int): Array<UInt8> {
         let buf = ByteArrayOutputStream()
         buf.writeShort(UInt16(packetId))
         let result = ByteArrayOutputStream()
@@ -128,7 +131,7 @@ public abstract class ProtocolCodec {
     }
 
     /// 编码 PUBREC 包
-    public func encodePubRec(packetId: Int): Array<UInt8> {
+    public open func encodePubRec(packetId: Int): Array<UInt8> {
         let buf = ByteArrayOutputStream()
         buf.writeShort(UInt16(packetId))
         let result = ByteArrayOutputStream()
@@ -139,7 +142,7 @@ public abstract class ProtocolCodec {
     }
 
     /// 编码 PUBREL 包
-    public func encodePubRel(packetId: Int): Array<UInt8> {
+    public open func encodePubRel(packetId: Int): Array<UInt8> {
         let buf = ByteArrayOutputStream()
         buf.writeShort(UInt16(packetId))
         let result = ByteArrayOutputStream()
@@ -150,7 +153,7 @@ public abstract class ProtocolCodec {
     }
 
     /// 编码 PUBCOMP 包
-    public func encodePubComp(packetId: Int): Array<UInt8> {
+    public open func encodePubComp(packetId: Int): Array<UInt8> {
         let buf = ByteArrayOutputStream()
         buf.writeShort(UInt16(packetId))
         let result = ByteArrayOutputStream()
@@ -165,9 +168,13 @@ public abstract class ProtocolCodec {
     // ============================================================
 
     /// 解析 CONNACK 包（模板方法）
-    public func parseConnAck(packet: MqttPacket): ConnAckResult {
+    public open func parseConnAck(packet: MqttPacket): ConnAckResult {
         let input = ByteArrayInputStream(packet.payload)
         let flags = input.read()
+        // [MQTT-3.2.2-2] Acknowledge Flags bits 7-1 保留，必须为 0
+        if ((flags & 0xFE) != 0) {
+            throw ProtocolError("CONNACK Acknowledge Flags reserved bits 7-1 must be 0")
+        }
         let sessionPresent = (flags & 0x01) != 0
         let returnCodeValue = input.read()
         let returnCode = ConnectReturnCode.fromInt(Int64(returnCodeValue))
@@ -196,7 +203,8 @@ public abstract class ProtocolCodec {
         }
 
         let retained = (packet.flags & UInt8(0x01)) != UInt8(0)
-        return PublishResult(topic, payload, qos, retained, packetId, properties)
+        let dup = (packet.flags & UInt8(0x08)) != UInt8(0)
+        return PublishResult(topic, payload, qos, retained, dup, packetId, properties)
     }
 
     /// 解析 SUBACK 包（模板方法）
@@ -243,8 +251,11 @@ public abstract class ProtocolCodec {
     /// 写入 PUBLISH Properties（V311→空, V50→properties.encode()）
     protected func writePublishProperties(buf: ByteArrayOutputStream, properties: MqttProperties): Unit
 
-    /// 写入 SUBSCRIBE Properties 长度（V311→空, V50→写 0）
-    protected func writeSubscribeProperties(buf: ByteArrayOutputStream): Unit
+    /// 写入 SUBSCRIBE Properties（V311→空, V50→写 properties encode）
+    protected func writeSubscribeProperties(buf: ByteArrayOutputStream, properties: MqttProperties): Unit
+
+    /// 编码单个订阅的 Subscription Options 字节（V311→QoS 原值, V50→QoS 左移 1 位，bit0 保留）
+    protected func encodeSubscriptionOptions(sub: Subscription): UInt8
 
     /// 写入 UNSUBSCRIBE Properties 长度（V311→空, V50→写 0）
     protected func writeUnsubscribeProperties(buf: ByteArrayOutputStream): Unit
@@ -304,11 +315,15 @@ public abstract class ProtocolCodec {
                 flags = flags | 0b00100000
             }
         }
-        if (options.password.isSome()) {
-            flags = flags | 0b01000000
-        }
         if (options.username.isSome()) {
             flags = flags | 0b10000000
+        }
+        // [MQTT-3.1.2-16]: 若 Username Flag 未置位，则 Password Flag 必须为 0
+        if (options.password.isSome() && options.username.isNone()) {
+            throw ProtocolError("Password Flag 置位但 Username Flag 未置位（违反 MQTT-3.1.2-16）")
+        }
+        if (options.password.isSome()) {
+            flags = flags | 0b01000000
         }
         return flags
     }
@@ -316,6 +331,16 @@ public abstract class ProtocolCodec {
     /// 写入 CONNECT 包的 Payload（clientId + will + username + password）
     protected static func writeConnectPayload(buf: ByteArrayOutputStream, options: ConnectOptions): Unit {
         writeString(buf, options.clientId)
+        // v5.0 Will Properties（v3.1.1 Will Properties 字段不存在）
+        if (options.willTopic.isSome() && options.protocolVersion.toInt() == 5) {
+            let wProps = options.willProperties.encode()
+            if (wProps.size > 0) {
+                writeVariableByteInteger(buf, wProps.size)
+                buf.writeAll(wProps)
+            } else {
+                buf.write(0)  // empty Will Properties Length
+            }
+        }
         if (options.willTopic.isSome()) {
             writeString(buf, options.willTopic.getOrThrow())
             let willPayload = options.willPayload ?? Array<UInt8>()
@@ -345,6 +370,10 @@ public abstract class ProtocolCodec {
     }
 
     protected static func writeVariableByteInteger(buf: ByteArrayOutputStream, value: Int64): Unit {
+        // MQTT 可变字节整数上限 = 268,435,455（4 字节最大编码值）
+        if (value < 0 || value > 268435455) {
+            throw ProtocolError("VBI 值超出合法范围: ${value}")
+        }
         var val = value
         do {
             var byte = UInt8(val % 128)
@@ -375,12 +404,21 @@ public abstract class ProtocolCodec {
     protected static func readVariableByteInteger(input: ByteArrayInputStream): Int {
         var result: Int = 0
         var multiplier: Int = 1
+        var byteCount: Int = 0
         var byte: Int64 = 0
         do {
             byte = Int64(input.read())
             result = result + (byte & 0x7F) * multiplier
             multiplier = multiplier * 128
+            byteCount += 1
+            if (byteCount > 4) {
+                throw ProtocolError("VBI 超过 4 字节上限（非法格式）")
+            }
         } while ((byte & 0x80) != 0)
+        // MQTT 规范上限 268,435,455（> 此值必须视为 Malformed Packet）
+        if (result > 268435455) {
+            throw ProtocolError("VBI 值超出 MQTT 上限 268435455: ${result}")
+        }
         return result
     }
 
@@ -422,8 +460,13 @@ public abstract class ProtocolCodec {
             } else if (code < UInt32(0x800)) {
                 result.add(UInt8(0xC0 | (code >> 6)))
                 result.add(UInt8(0x80 | (code & 0x3F)))
-            } else {
+            } else if (code < UInt32(0x10000)) {
                 result.add(UInt8(0xE0 | (code >> 12)))
+                result.add(UInt8(0x80 | ((code >> 6) & 0x3F)))
+                result.add(UInt8(0x80 | (code & 0x3F)))
+            } else {
+                result.add(UInt8(0xF0 | (code >> 18)))
+                result.add(UInt8(0x80 | ((code >> 12) & 0x3F)))
                 result.add(UInt8(0x80 | ((code >> 6) & 0x3F)))
                 result.add(UInt8(0x80 | (code & 0x3F)))
             }

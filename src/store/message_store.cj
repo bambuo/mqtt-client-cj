@@ -53,12 +53,23 @@ public class MessageStore {
     private var nextPacketId: Int64 = 1
     
     /// 生成新的 packet ID
-    public func generatePacketId(): Int64 {
-        let id = nextPacketId
-        nextPacketId = nextPacketId + 1
-        if (nextPacketId > 65535) {
-            nextPacketId = 1
+    ///
+    /// MQTT 规范（§2.3.1 / §2.2.2）要求：packet ID 在 QoS 1/2 消息确认前不得复用。
+    /// 因此本方法跳过当前仍 in-flight（存在未确认 QoS1/2 消息）的 ID。
+    /// 若所有 ID 都在 in-flight（65535 个未确认），返回 None（调用方应做背压处理）。
+    /// 注意：调用方需自行保证并发安全（如外部持锁）。
+    public func generatePacketId(): ?Int64 {
+        var id = nextPacketId
+        var tried = 0
+        // 跳过已 in-flight 的 ID（最多尝试 65535 次）
+        while (inflightMessages.contains(id) && tried < 65535) {
+            id = (id % 65535) + 1
+            tried += 1
         }
+        if (inflightMessages.contains(id)) {
+            return None  // 全部 ID 都在 in-flight
+        }
+        nextPacketId = (id % 65535) + 1
         return id
     }
     

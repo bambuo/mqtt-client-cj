@@ -181,7 +181,7 @@ public enum ConnectReturnCode {
             case 3 => SERVER_UNAVAILABLE
             case 4 => BAD_CREDENTIALS
             case 5 => NOT_AUTHORIZED
-            case _ => ACCEPTED
+            case _ => SERVER_UNAVAILABLE  // 非法值映射为 SERVER_UNAVAILABLE（而非 ACCEPTED），调用方应校验
         }
     }
 }
@@ -279,6 +279,9 @@ public class MqttProperties {
             buf.add(UInt8(v & 0xFF))
         }
         func writeVbi(v: Int64): Unit {
+            if (v < 0 || v > 268435455) {
+                throw ProtocolError("VBI 值超出合法范围: ${v}")
+            }
             var val = v
             do {
                 var byte = UInt8(val % 128)
@@ -288,11 +291,10 @@ public class MqttProperties {
             } while (val > 0)
         }
         func writeUtf8(s: String): Unit {
-            let bytes = ArrayList<UInt8>()
-            for (b in s) { bytes.add(b) }
+            let bytes = encodeUtf8(s)
             let size = Int64(bytes.size)
             writeUint16(size)
-            for (i in 0..bytes.size) { buf.add(bytes[Int64(i)]) }
+            for (b in bytes) { buf.add(b) }
         }
         func writeBinary(data: Array<UInt8>): Unit {
             writeUint16(Int64(data.size))
@@ -360,6 +362,21 @@ public class MqttProperties {
             buf.add(PropId.userProperty); writeUtf8(k); writeUtf8(v)
         }
 
+        // Reason String (0x1F) — DISCONNECT / AUTH / QoS ack 均可携带
+        if (reasonString.isSome()) {
+            let v = reasonString.getOrThrow()
+            buf.add(PropId.reasonString); writeUtf8(v)
+        }
+        // Authentication Method (0x15) and Data (0x16) — v5.0 增强认证
+        if (authenticationMethod.isSome()) {
+            let v = authenticationMethod.getOrThrow()
+            buf.add(PropId.authenticationMethod); writeUtf8(v)
+        }
+        if (authenticationData.isSome()) {
+            let v = authenticationData.getOrThrow()
+            buf.add(PropId.authenticationData); writeBinary(v)
+        }
+
         // 转换为 Array<UInt8>
         let result = Array<UInt8>(buf.size, repeat: UInt8(0))
         for (i in 0..buf.size) { result[Int64(i)] = buf[Int64(i)] }
@@ -374,6 +391,12 @@ public class MqttProperties {
             payloadFormatIndicator.isNone() && messageExpiryInterval.isNone() &&
             responseTopic.isNone() && correlationData.isNone() &&
             subscriptionIdentifier.isNone() && topicAlias.isNone() &&
+            serverKeepAlive.isNone() && assignedClientIdentifier.isNone() &&
+            serverReference.isNone() && responseInformation.isNone() &&
+            reasonString.isNone() && authenticationMethod.isNone() &&
+            authenticationData.isNone() && maximumQoS.isNone() &&
+            retainAvailable.isNone() && wildcardSubscriptionAvailable.isNone() &&
+            subscriptionIdentifierAvailable.isNone() && sharedSubscriptionAvailable.isNone() &&
             userProperties.isEmpty()
     }
 
@@ -516,12 +539,23 @@ public class MqttProperties {
         var multiplier: Int64 = 1
         var pos = offset
         var byte: UInt8
+        var byteCount: Int64 = 0
         do {
+            if (pos >= data.size) {
+                return (value, pos - offset)  // 数据边界保护
+            }
             byte = data[pos]
             value += Int64(byte & 0x7F) * multiplier
             multiplier *= 128
             pos += 1
+            byteCount += 1
+            if (byteCount > 4) {
+                throw ProtocolError("VBI 超过 4 字节上限（非法格式）")
+            }
         } while ((byte & 0x80) != 0)
+        if (value > 268435455) {
+            throw ProtocolError("VBI 值超出 MQTT 上限 268435455: ${value}")
+        }
         return (value, pos - offset)
     }
 
@@ -539,6 +573,9 @@ public class MqttProperties {
     }
 
     private static func writeVbi(buf: ByteArrayOutputStream, v: Int64): Unit {
+        if (v < 0 || v > 268435455) {
+            throw ProtocolError("VBI 值超出合法范围: ${v}")
+        }
         var val = v
         do {
             var byte = UInt8(val % 128)
@@ -549,15 +586,35 @@ public class MqttProperties {
     }
 
     private static func writeUtf8(buf: ByteArrayOutputStream, s: String): Unit {
-        // 手动将 String 转换为 UTF-8 字节
-        let bytes = ArrayList<UInt8>()
-        for (b in s) {
-            bytes.add(b)
-        }
+        let bytes = encodeUtf8(s)
         let arr = Array<UInt8>(bytes.size, repeat: UInt8(0))
         for (i in 0..bytes.size) { arr[Int64(i)] = bytes[Int64(i)] }
         writeUint16(buf, Int64(arr.size))
         buf.writeAll(arr)
+    }
+
+    /// 将 String 编码为 UTF-8 字节（支持全 Unicode 范围，含 4 字节补充平面）
+    private static func encodeUtf8(s: String): ArrayList<UInt8> {
+        let result = ArrayList<UInt8>()
+        for (c in s) {
+            let code = UInt32(c)
+            if (code < UInt32(0x80)) {
+                result.add(UInt8(code))
+            } else if (code < UInt32(0x800)) {
+                result.add(UInt8(0xC0 | (code >> 6)))
+                result.add(UInt8(0x80 | (code & 0x3F)))
+            } else if (code < UInt32(0x10000)) {
+                result.add(UInt8(0xE0 | (code >> 12)))
+                result.add(UInt8(0x80 | ((code >> 6) & 0x3F)))
+                result.add(UInt8(0x80 | (code & 0x3F)))
+            } else {
+                result.add(UInt8(0xF0 | (code >> 18)))
+                result.add(UInt8(0x80 | ((code >> 12) & 0x3F)))
+                result.add(UInt8(0x80 | ((code >> 6) & 0x3F)))
+                result.add(UInt8(0x80 | (code & 0x3F)))
+            }
+        }
+        return result
     }
 
     private static func writeBinary(buf: ByteArrayOutputStream, data: Array<UInt8>): Unit {
@@ -743,6 +800,7 @@ public class ConnectOptions {
     public var willPayload: ?Array<UInt8>
     public var willQos: QoS
     public var willRetain: Bool
+    public var willProperties: MqttProperties = MqttProperties()  // v5.0 Will Properties（Will Delay / Content Type 等）
     public var useTls: Bool = false
     public var tlsOptions: TlsOptions = TlsOptions()
     public var properties: MqttProperties = MqttProperties()

@@ -8,8 +8,6 @@
 
 package mqtt.protocol
 
-import std.collection.*
-
 public class V311Codec <: ProtocolCodec {
 
     // ==================== Hooks（基类模板方法调用） ====================
@@ -24,7 +22,12 @@ public class V311Codec <: ProtocolCodec {
     public override func writePublishProperties(buf: ByteArrayOutputStream, properties: MqttProperties): Unit {
     }
 
-    public override func writeSubscribeProperties(buf: ByteArrayOutputStream): Unit {
+    public override func writeSubscribeProperties(buf: ByteArrayOutputStream, properties: MqttProperties): Unit {
+    }
+
+    // v3.1.1：Subscription Options 字节即 QoS 原值（0/1/2）
+    public override func encodeSubscriptionOptions(sub: Subscription): UInt8 {
+        return UInt8(qosToInt(sub.qos))
     }
 
     public override func writeUnsubscribeProperties(buf: ByteArrayOutputStream): Unit {
@@ -44,12 +47,12 @@ public class V311Codec <: ProtocolCodec {
 
     // ==================== 编码（独立实现） ====================
 
-    public override func encodeDisconnect(): Array<UInt8> {
+    public override func encodeDisconnect(reasonCode: ReasonCode, properties: MqttProperties): Array<UInt8> {
         return [0xE0, 0x00]
     }
 
     public override func encodeAuth(reasonCode: ReasonCode, properties: MqttProperties): Array<UInt8> {
-        return Array<UInt8>()
+        throw Exception("AUTH 包在 MQTT v3.1.1 中不存在")
     }
 
     // ==================== 解码（独立实现） ====================

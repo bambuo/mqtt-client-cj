@@ -9,11 +9,14 @@ package mqtt.protocol
 public class ConnAckResult {
     public var sessionPresent: Bool
     public var returnCode: ConnectReturnCode
+    public var reasonCode: ReasonCode
     public var properties: MqttProperties
 
-    public init(sessionPresent: Bool, returnCode: ConnectReturnCode, properties: MqttProperties) {
+    public init(sessionPresent: Bool, returnCode: ConnectReturnCode, properties: MqttProperties,
+        reasonCode!: ReasonCode = ReasonCode.Success) {
         this.sessionPresent = sessionPresent
         this.returnCode = returnCode
+        this.reasonCode = reasonCode
         this.properties = properties
     }
 }
@@ -24,15 +27,17 @@ public class PublishResult {
     public var payload: Array<UInt8>
     public var qos: QoS
     public var retained: Bool
+    public var dup: Bool
     public var packetId: Int
     public var properties: MqttProperties
 
     public init(topic: String, payload: Array<UInt8>, qos: QoS, retained: Bool,
-        packetId: Int, properties: MqttProperties) {
+        dup: Bool, packetId: Int, properties: MqttProperties) {
         this.topic = topic
         this.payload = payload
         this.qos = qos
         this.retained = retained
+        this.dup = dup
         this.packetId = packetId
         this.properties = properties
     }

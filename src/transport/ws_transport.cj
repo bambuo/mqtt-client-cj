@@ -3,7 +3,6 @@ package mqtt.transport
 
 import stdx.net.http.*
 import stdx.encoding.url.*
-import stdx.crypto.kit
 import std.collection.*
 import mqtt.protocol.Result
 import mqtt.protocol.Transport
@@ -43,7 +42,7 @@ public class WsTransport <: Transport {
             let (wsSocket, _) = WebSocket.upgradeFromClient(httpClient, url,
                 subProtocols: subProtocols)
             ws = Some(wsSocket)
-            isRunning = true
+            isRunning = true  // 在 WebSocket 升级成功后才标记为运行中
 
             // 启动接收线程
             startReceiveThread()
@@ -102,14 +101,11 @@ public class WsTransport <: Transport {
                             ()
                     }
 
-                    // 如果收到关闭帧，退出循环
-                    if (frame.frameType == CloseWebFrame) {
-                        break
-                    }
                 } catch (e: Exception) {
                     if (isRunning) {
                         println("WebSocket 接收错误: " + e.message)
                     }
+                    isRunning = false
                     break
                 }
             }

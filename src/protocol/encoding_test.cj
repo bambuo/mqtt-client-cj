@@ -122,6 +122,9 @@ func testPubAckRoundtrip() {
     @Expect(mqttPacket.packetType.toInt(), 4)  // PUBACK
     let result = codec.parsePubAck(mqttPacket)
     @Expect(result.packetId, 123)
+    @Expect(result.success, true)
+    @Expect(result.reasonCode.toInt(), 0)  // Success
+    @Expect(result.properties.isEmpty(), true)
 }
 
 @Test
@@ -135,6 +138,8 @@ func testPubRecRoundtrip() {
     @Expect(mqttPacket.packetType.toInt(), 5)  // PUBREC
     let result = codec.parsePubRec(mqttPacket)
     @Expect(result.packetId, 456)
+    @Expect(result.success, true)
+    @Expect(result.reasonCode.toInt(), 0)
 }
 
 @Test
@@ -148,6 +153,8 @@ func testPubRelRoundtrip() {
     @Expect(mqttPacket.packetType.toInt(), 6)  // PUBREL
     let result = codec.parsePubRel(mqttPacket)
     @Expect(result.packetId, 789)
+    @Expect(result.success, true)
+    @Expect(result.reasonCode.toInt(), 0)
 }
 
 @Test
@@ -161,6 +168,8 @@ func testPubCompRoundtrip() {
     @Expect(mqttPacket.packetType.toInt(), 7)  // PUBCOMP
     let result = codec.parsePubComp(mqttPacket)
     @Expect(result.packetId, 999)
+    @Expect(result.success, true)
+    @Expect(result.reasonCode.toInt(), 0)
 }
 
 @Test
@@ -204,7 +213,7 @@ func testPingReqEncoding() {
 @Test
 func testDisconnectV311Encoding() {
     let codec = ProtocolCodec.create(ProtocolVersion.V3_1_1)
-    let packet = codec.encodeDisconnect()
+    let packet = codec.encodeDisconnect(ReasonCode.Success, MqttProperties())
     @Expect(packet[0], UInt8(0xE0))
     @Expect(packet[1], UInt8(0x00))
 }
@@ -212,7 +221,7 @@ func testDisconnectV311Encoding() {
 @Test
 func testDisconnectV50Encoding() {
     let codec = ProtocolCodec.create(ProtocolVersion.V5_0)
-    let packet = codec.encodeDisconnect()
+    let packet = codec.encodeDisconnect(ReasonCode.Success, MqttProperties())
     @Expect(packet[0], UInt8(0xE0))
     @Expect(packet[1], UInt8(0x02))
     @Expect(packet[2], UInt8(0x00))  // Reason code
@@ -548,6 +557,13 @@ func testPropertiesDecodeMultiple() {
     data[3] = UInt8(0x0E); data[4] = UInt8(0x10)  // 3600
     data[5] = UInt8(0x21)
     data[6] = UInt8(0x00); data[7] = UInt8(0x64)  // 100
+
+    let props = MqttProperties.decode(data)
+    @Expect(props.isEmpty(), false)
+    @Expect(props.sessionExpiryInterval.isSome(), true)
+    @Expect(props.sessionExpiryInterval.getOrThrow(), Int64(3600))
+    @Expect(props.receiveMaximum.isSome(), true)
+    @Expect(props.receiveMaximum.getOrThrow(), Int64(100))
 }
 
 
@@ -571,7 +587,7 @@ func testDecodeIncompleteHeader() {
 @Test
 func testCodecFactoryV311() {
     let codec = ProtocolCodec.create(ProtocolVersion.V3_1_1)
-    let packet = codec.encodeDisconnect()
+    let packet = codec.encodeDisconnect(ReasonCode.Success, MqttProperties())
     @Expect(packet.size, Int64(2))
     @Expect(packet[0], UInt8(0xE0))
     @Expect(packet[1], UInt8(0x00))
@@ -580,7 +596,7 @@ func testCodecFactoryV311() {
 @Test
 func testCodecFactoryV50() {
     let codec = ProtocolCodec.create(ProtocolVersion.V5_0)
-    let packet = codec.encodeDisconnect()
+    let packet = codec.encodeDisconnect(ReasonCode.Success, MqttProperties())
     @Expect(packet.size, Int64(4))
     @Expect(packet[2], UInt8(0x00))
     @Expect(packet[3], UInt8(0x00))
@@ -704,19 +720,28 @@ func testAllQoSAckRoundtrip() {
 
     let ackEnc = codec.encodePubAck(100)
     let ackDec = MqttDecoder.decode(ackEnc).getOrThrow()
-    @Expect(codec.parsePubAck(ackDec).packetId, 100)
+    let ackResult = codec.parsePubAck(ackDec)
+    @Expect(ackResult.packetId, 100)
+    @Expect(ackResult.success, true)
+    @Expect(ackResult.reasonCode.toInt(), 0)
 
     let recEnc = codec.encodePubRec(200)
     let recDec = MqttDecoder.decode(recEnc).getOrThrow()
-    @Expect(codec.parsePubRec(recDec).packetId, 200)
+    let recResult = codec.parsePubRec(recDec)
+    @Expect(recResult.packetId, 200)
+    @Expect(recResult.success, true)
 
     let relEnc = codec.encodePubRel(300)
     let relDec = MqttDecoder.decode(relEnc).getOrThrow()
-    @Expect(codec.parsePubRel(relDec).packetId, 300)
+    let relResult = codec.parsePubRel(relDec)
+    @Expect(relResult.packetId, 300)
+    @Expect(relResult.success, true)
 
     let compEnc = codec.encodePubComp(400)
     let compDec = MqttDecoder.decode(compEnc).getOrThrow()
-    @Expect(codec.parsePubComp(compDec).packetId, 400)
+    let compResult = codec.parsePubComp(compDec)
+    @Expect(compResult.packetId, 400)
+    @Expect(compResult.success, true)
 }
 
 @Test
