@@ -87,10 +87,12 @@ public class V50Codec <: ProtocolCodec {
 
     public override func parsePublishProperties(input: ByteArrayInputStream, totalSize: Int64): MqttProperties {
         var properties = MqttProperties()
-        let propertiesLength = readVariableByteInteger(input)
-        if (propertiesLength > 0) {
-            let propBytes = readRemainingBytes(input, propertiesLength)
-            properties = MqttProperties.decode(propBytes)
+        if (input.getPosition() < totalSize) {
+            let propertiesLength = readVariableByteInteger(input)
+            if (propertiesLength > 0) {
+                let propBytes = readRemainingBytes(input, propertiesLength)
+                properties = MqttProperties.decode(propBytes)
+            }
         }
         return properties
     }

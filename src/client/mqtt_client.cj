@@ -300,11 +300,12 @@ public class MqttClient {
 
         let result = transport.send(packet)
         if (result.isErr()) {
-            // 如果发送失败，删除已存储的回调
+            // 如果发送失败，删除已存储的回调和订阅记录
             synchronized(lock) {
                 if (callback.isSome()) {
                     topicCallbacks.remove(topic)
                 }
+                subscriptions.remove(topic)
             }
             return Err(result.unwrapErr())
         }
@@ -378,7 +379,8 @@ public class MqttClient {
     private func handleConnectionLost(): Unit {
         let needReconnect = synchronized(lock) {
             isConnected = false
-            options.autoReconnect
+            // 仅当用户未主动断开（shouldReconnect 仍为 true）且开启自动重连时才启动重连
+            shouldReconnect && options.autoReconnect
         }
         onDisconnect()  // 始终通知断开（锁外，避免持锁调用用户回调）
         if (needReconnect) {
@@ -511,6 +513,8 @@ public class MqttClient {
     // 处理接收到的数据（支持 TCP 分包/粘包）
     private func handleReceivedData(data: Array<UInt8>) {
         // 从缓冲区中提取所有可解析的完整包（加锁保护 receiveBuffer）
+        // 同时收集解析错误，锁外上报避免持锁调用用户回调
+        var parseErrors = ArrayList<String>()
         let packets = synchronized(lock) {
             // 将新数据加入缓冲区
             for (b in data) { receiveBuffer.add(b) }
@@ -534,7 +538,7 @@ public class MqttClient {
                 let packetOpt = MqttDecoder.decode(packetData)
                 if (packetOpt.isNone()) {
                     // 解析失败：跳过 1 字节后继续（防止恶意数据卡死），而非清空全部
-                    onError("无法解析数据包，跳过 1 字节")
+                    parseErrors.add("无法解析数据包，跳过 1 字节")
                     if (receiveBuffer.size > 1) {
                         var newBuf = ArrayList<UInt8>()
                         for (i in 1..receiveBuffer.size) { newBuf.add(receiveBuffer[Int64(i)]) }
@@ -556,6 +560,11 @@ public class MqttClient {
                 ready.add(packetOpt.getOrThrow())
             }
             ready
+        }
+
+        // 锁外上报解析错误（避免持锁调用用户回调）
+        for (msg in parseErrors) {
+            onError(msg)
         }
 
         // 在锁外处理每个包（处理过程内部按需加锁），避免长时间持锁
@@ -634,6 +643,12 @@ public class MqttClient {
     private func handlePubRec(packet: MqttPacket): Unit {
         let result = codec.parsePubRec(packet)
         println("PUBREC (packetId=${result.packetId}, reasonCode=${result.reasonCode.toInt()})")
+
+        // v5.0: 若 PUBREC 返回失败 (reasonCode >= 0x80)，不回 PUBREL，消息保持 in-flight 等待重传或上层处理
+        if (!result.success) {
+            println("PUBREC 失败 (reasonCode=${result.reasonCode.toInt()})，不回 PUBREL")
+            return
+        }
 
         // 更新 inflight 状态为 WAIT_PUBREL（共享状态变更，加锁）
         let updated = synchronized(lock) {
@@ -840,13 +855,17 @@ public class MqttClient {
             matched
         }
 
-        if (callbacks.size == 0) {
-            // 没有找到 per-topic 回调，使用全局 onMessage
-            onMessage(effectiveTopic, result.payload)
-        } else {
-            for (cb in callbacks) {
-                cb(effectiveTopic, result.payload)
-            }
+        // 交付消息给回调（QoS 0/1 在此交付；QoS 2 推迟至 PUBREL 到达后交付，MQTT-4.3.3）
+        match (result.qos) {
+            case EXACTLY_ONCE => ()  // 暂不交付，在 handlePubRel 中交付
+            case _ =>
+                if (callbacks.size == 0) {
+                    onMessage(effectiveTopic, result.payload)
+                } else {
+                    for (cb in callbacks) {
+                        cb(effectiveTopic, result.payload)
+                    }
+                }
         }
 
         // QoS 1 和 QoS 2: 发送确认

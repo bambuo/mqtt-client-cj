@@ -206,13 +206,15 @@ public class PropId {
     public static let topicAliasMaximum: UInt8 = 0x22
     public static let topicAlias: UInt8 = 0x23
     public static let requestResponseInformation: UInt8 = 0x19
-    public static let requestProblemInformation: UInt8 = 0x1A
+    public static let requestProblemInformation: UInt8 = 0x17  // MQTT-5.0 §3.1.2.11.5
     public static let userProperty: UInt8 = 0x26
     public static let payloadFormatIndicator: UInt8 = 0x01
     public static let messageExpiryInterval: UInt8 = 0x02
     public static let responseTopic: UInt8 = 0x08
     public static let correlationData: UInt8 = 0x09
     public static let subscriptionIdentifier: UInt8 = 0x0B
+    public static let contentTyp: UInt8 = 0x03             // Content Type (UTF-8)
+    public static let willDelayInterval: UInt8 = 0x18      // Will Delay Interval (4B int)
     public static let sessionExpiryIntervalConnAck: UInt8 = 0x11
     public static let serverKeepAlive: UInt8 = 0x13
     public static let reasonString: UInt8 = 0x1F
@@ -244,6 +246,8 @@ public class MqttProperties {
     public var correlationData: ?Array<UInt8> = None
     public var subscriptionIdentifier: ?Int64 = None
     public var topicAlias: ?Int64 = None
+    public var contentType: ?String = None                    // 0x03 Content Type
+    public var willDelayInterval: ?Int64 = None              // 0x18 Will Delay Interval
     // 通用属性
     public var userProperties: HashMap<String, String> = HashMap()
     // CONNACK 属性
@@ -356,6 +360,14 @@ public class MqttProperties {
             let v = correlationData.getOrThrow()
             buf.add(PropId.correlationData); writeBinary(v)
         }
+        if (contentType.isSome()) {
+            let v = contentType.getOrThrow()
+            buf.add(PropId.contentTyp); writeUtf8(v)
+        }
+        if (willDelayInterval.isSome()) {
+            let v = willDelayInterval.getOrThrow()
+            buf.add(PropId.willDelayInterval); writeUint32(v)
+        }
 
         // User Properties
         for ((k, v) in userProperties) {
@@ -385,19 +397,20 @@ public class MqttProperties {
 
     // 是否为空的快捷判断
     public func isEmpty(): Bool {
-        return sessionExpiryInterval.isNone() && receiveMaximum.isNone() &&
-            maximumPacketSize.isNone() && topicAliasMaximum.isNone() &&
-            requestResponseInformation.isNone() && requestProblemInformation.isNone() &&
-            payloadFormatIndicator.isNone() && messageExpiryInterval.isNone() &&
-            responseTopic.isNone() && correlationData.isNone() &&
-            subscriptionIdentifier.isNone() && topicAlias.isNone() &&
-            serverKeepAlive.isNone() && assignedClientIdentifier.isNone() &&
-            serverReference.isNone() && responseInformation.isNone() &&
-            reasonString.isNone() && authenticationMethod.isNone() &&
-            authenticationData.isNone() && maximumQoS.isNone() &&
-            retainAvailable.isNone() && wildcardSubscriptionAvailable.isNone() &&
-            subscriptionIdentifierAvailable.isNone() && sharedSubscriptionAvailable.isNone() &&
-            userProperties.isEmpty()
+    return sessionExpiryInterval.isNone() && receiveMaximum.isNone() &&
+        maximumPacketSize.isNone() && topicAliasMaximum.isNone() &&
+        requestResponseInformation.isNone() && requestProblemInformation.isNone() &&
+        payloadFormatIndicator.isNone() && messageExpiryInterval.isNone() &&
+        responseTopic.isNone() && correlationData.isNone() &&
+        subscriptionIdentifier.isNone() && topicAlias.isNone() &&
+        contentType.isNone() && willDelayInterval.isNone() &&
+        serverKeepAlive.isNone() && assignedClientIdentifier.isNone() &&
+        serverReference.isNone() && responseInformation.isNone() &&
+        reasonString.isNone() && authenticationMethod.isNone() &&
+        authenticationData.isNone() && maximumQoS.isNone() &&
+        retainAvailable.isNone() && wildcardSubscriptionAvailable.isNone() &&
+        subscriptionIdentifierAvailable.isNone() && sharedSubscriptionAvailable.isNone() &&
+        userProperties.isEmpty()
     }
 
     // ---- 解码辅助 ----
@@ -431,6 +444,13 @@ public class MqttProperties {
                     let (v, n) = readVbi(data, i)
                     props.subscriptionIdentifier = Some(v)
                     i += n
+                case 0x03 =>
+                    let (s, n) = readUtf8(data, i)
+                    props.contentType = Some(s)
+                    i += n
+                case 0x18 =>
+                    props.willDelayInterval = Some(readUint32(data, i))
+                    i += 4
                 case 0x11 =>
                     props.sessionExpiryInterval = Some(readUint32(data, i))
                     i += 4
