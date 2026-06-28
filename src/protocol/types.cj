@@ -465,7 +465,7 @@ public class MqttProperties {
                     let (buf, n) = readBinary(data, i)
                     props.authenticationData = Some(buf)
                     i += n
-                case 0x1A =>
+                case 0x17 =>
                     props.requestProblemInformation = Some(data[i] != 0)
                     i += 1
                 case 0x19 =>
@@ -521,7 +521,9 @@ public class MqttProperties {
                     i += n2
                     props.userProperties.add(k, v)
                 case _ =>
-                    i = data.size
+                    // 未知属性 ID：安全退出（MQTT 规范允许忽略未知属性）
+                    // 由于无法确定未知属性的值长度，退回已解析的部分
+                    return props
             }
         }
         return props
@@ -562,7 +564,7 @@ public class MqttProperties {
         var byteCount: Int64 = 0
         do {
             if (pos >= data.size) {
-                return (value, pos - offset)  // 数据边界保护
+                throw ProtocolError("VBI 数据截断：期望后续字节但输入不完整")
             }
             byte = data[pos]
             value += Int64(byte & 0x7F) * multiplier

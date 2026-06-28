@@ -55,7 +55,11 @@ public class TopicMatcher {
     // - # 只能出现在末尾
     // - # 前必须是 / 或开头
     // - + 必须单独作为一个层级
+    // - 主题过滤器至少一个字符（MQTT-1.5.4）
     public static func isValidTopicFilter(topicFilter!: String): Bool {
+        if (topicFilter.isEmpty()) {
+            return false
+        }
         let parts = topicFilter.split("/")
         
         for (i in 0..parts.size) {
@@ -77,9 +81,9 @@ public class TopicMatcher {
         return true
     }
     
-    // 验证 topic 是否合法 (不能包含通配符)
+    // 验证 topic 是否合法 (不能包含通配符，至少一个字符)
     public static func isValidTopic(topic!: String): Bool {
-        // topic 不能包含 # 或 +
-        return !topic.contains("#") && !topic.contains("+")
+        // topic 不能包含 # 或 +，且不能为空
+        return !topic.contains("#") && !topic.contains("+") && !topic.isEmpty()
     }
 }

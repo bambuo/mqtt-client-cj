@@ -39,6 +39,9 @@ public class MqttClient {
     // 当 PUBLISH 的 Topic Name 为零长时，根据 Topic Alias 属性查找真实主题
     private var topicAliasMap: HashMap<Int64, String> = HashMap()
 
+    // 待确认订阅追踪（packetId → topic），用于 SUBACK 失败时清理
+    private var pendingSubscriptions: HashMap<Int64, String> = HashMap()
+
     // Keep Alive 计时字段
     private var lastPingReqTime: Int64 = 0  // 上次发送 PINGREQ 的时间
     private var lastPingRespTime: Int64 = 0 // 上次收到 PINGRESP 的时间
@@ -125,6 +128,10 @@ public class MqttClient {
         synchronized(lock) {
             isConnected = true
             keepAliveGeneration += 1
+            // 连接成功后，若启用自动重连则允许后续断线时触发重连
+            if (options.autoReconnect) {
+                shouldReconnect = true
+            }
         }
 
         // 启动 Keep Alive 定时器
@@ -288,6 +295,8 @@ public class MqttClient {
                 None
             } else {
                 let packetId = pidOpt.getOrThrow()
+                // 追踪待确认订阅，供 SUBACK 失败时清理
+                pendingSubscriptions.add(packetId, topic)
                 let subs = [Subscription(topic, qos: qos)]
                 Some(codec.encodeSubscribe(subs, packetId))
             }
@@ -675,29 +684,34 @@ public class MqttClient {
         let result = codec.parsePubRel(packet)
         println("PUBREL (packetId=${result.packetId}, reasonCode=${result.reasonCode.toInt()})")
 
-        // 查找存储的 QoS 2 消息，并收集匹配的回调（共享状态变更，加锁）
-        // 回调执行放在锁外，避免持锁调用用户代码
-        let pubResultOpt = synchronized(lock) {
-            qos2Incoming.remove(result.packetId)
-        }
-
-        if (pubResultOpt.isSome()) {
-            let pubResult = pubResultOpt.getOrThrow()
-            // 收集匹配的回调（仅读，短时加锁）
-            let callbacks = synchronized(lock) {
-                let matched = ArrayList<(String, Array<UInt8>) -> Unit>()
-                for ((topicFilter, callbackFn) in topicCallbacks) {
-                    if (TopicMatcher.matches(topic: pubResult.topic, topicFilter: topicFilter)) {
-                        matched.add(callbackFn)
-                    }
-                }
-                matched
+        // v5.0: 若 PUBREL 携带失败 Reason Code，不交付消息（MQTT-4.3.3-6）
+        // 仍发送 PUBCOMP 以终止 QoS2 流程
+        if (!result.success) {
+            println("PUBREL 失败 (reasonCode=${result.reasonCode.toInt()})，不交付消息")
+            onError("QoS 2 消息交付失败 (packetId=${result.packetId}, reasonCode=${result.reasonCode.toInt()})")
+        } else {
+            // 查找存储的 QoS 2 消息，并收集匹配的回调（共享状态变更，加锁）
+            let pubResultOpt = synchronized(lock) {
+                qos2Incoming.remove(result.packetId)
             }
-            if (callbacks.size == 0) {
-                onMessage(pubResult.topic, pubResult.payload)
-            } else {
-                for (cb in callbacks) {
-                    cb(pubResult.topic, pubResult.payload)
+
+            if (pubResultOpt.isSome()) {
+                let pubResult = pubResultOpt.getOrThrow()
+                let callbacks = synchronized(lock) {
+                    let matched = ArrayList<(String, Array<UInt8>) -> Unit>()
+                    for ((topicFilter, callbackFn) in topicCallbacks) {
+                        if (TopicMatcher.matches(topic: pubResult.topic, topicFilter: topicFilter)) {
+                            matched.add(callbackFn)
+                        }
+                    }
+                    matched
+                }
+                if (callbacks.size == 0) {
+                    onMessage(pubResult.topic, pubResult.payload)
+                } else {
+                    for (cb in callbacks) {
+                        cb(pubResult.topic, pubResult.payload)
+                    }
                 }
             }
         }
@@ -717,6 +731,12 @@ public class MqttClient {
     private func handlePubComp(packet: MqttPacket): Unit {
         let result = codec.parsePubComp(packet)
         println("PUBCOMP (packetId=${result.packetId}, reasonCode=${result.reasonCode.toInt()})")
+
+        // v5.0: PUBCOMP 可能携带失败 Reason Code
+        if (!result.success) {
+            println("PUBCOMP 失败 (reasonCode=${result.reasonCode.toInt()})")
+            onError("QoS 2 流程异常终止 (packetId=${result.packetId}, reasonCode=${result.reasonCode.toInt()})")
+        }
 
         // 从 inflight 消息中删除（共享状态变更，加锁）
         let removed = synchronized(lock) {
@@ -784,12 +804,25 @@ public class MqttClient {
         println("SUBACK 已确认 (packetId=${result.packetId})")
         for (qos in result.grantedQos) {
             match (qos) {
-                case -1 => println("  主题订阅失败")
+                case -1 =>
+                    println("  主题订阅失败")
+                    // 清理失败订阅记录（避免重连时重复发送、避免残留回调）
+                    synchronized(lock) {
+                        let failedTopic = pendingSubscriptions.remove(result.packetId)
+                        if (failedTopic.isSome()) {
+                            topicCallbacks.remove(failedTopic.getOrThrow())
+                            subscriptions.remove(failedTopic.getOrThrow())
+                        }
+                    }
                 case 0 => println("  主题订阅: QoS 0")
                 case 1 => println("  主题订阅: QoS 1")
                 case 2 => println("  主题订阅: QoS 2")
                 case _ => println("  未知返回码: ${qos}")
             }
+        }
+        // 无论成功失败，清理 pending 追踪
+        synchronized(lock) {
+            pendingSubscriptions.remove(result.packetId)
         }
     }
 

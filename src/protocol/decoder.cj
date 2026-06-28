@@ -127,8 +127,9 @@ public class MqttDecoder {
     private static func validateFixedHeaderFlags(packetType: PacketType, flags: UInt8): Bool {
         match (packetType) {
             case PUBLISH =>
-                // PUBLISH 标志位可变，但 QoS=3（bits2-1=11）为保留值，必须当作畸形包拒绝
-                (flags & 0x06) != 0x06
+                // PUBLISH 标志位可变，但 QoS=3（bits2-1=11）为保留值；QoS=0 不可设 DUP
+                (flags & 0x06) != 0x06 &&
+                !((flags & 0x06) == 0 && (flags & 0x08) != 0)
             case PUBREL => (flags & 0x0F) == UInt8(0x02)  // 必须为 0x02
             case SUBSCRIBE => (flags & 0x0F) == UInt8(0x02)  // 必须为 0x02
             case UNSUBSCRIBE => (flags & 0x0F) == UInt8(0x02)  // 必须为 0x02

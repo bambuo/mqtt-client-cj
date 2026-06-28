@@ -120,7 +120,7 @@ public class WsTransport <: Transport {
             if (ws.isSome()) {
                 let wsSocket = ws.getOrThrow()
                 wsSocket.writeCloseFrame(status: UInt16(1000))
-                let _ = wsSocket.read()
+                // 不阻塞等待服务端回帧（调用方已有 disconnect 流程处理超时）
                 wsSocket.closeConn()
                 ws = None
             }

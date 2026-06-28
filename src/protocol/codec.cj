@@ -204,6 +204,13 @@ public abstract class ProtocolCodec {
 
         let retained = (packet.flags & UInt8(0x01)) != UInt8(0)
         let dup = (packet.flags & UInt8(0x08)) != UInt8(0)
+
+        // MQTT-3.3.2-1: Topic Name MUST be at least one character (v5.0 允许 topicAlias 补位,
+        // 由客户端层 handlePublish 解析别名；此处仅做协议级校验)
+        if (topic.isEmpty() && properties.topicAlias.isNone()) {
+            throw ProtocolError("PUBLISH Topic Name 为零长且无 Topic Alias")
+        }
+
         return PublishResult(topic, payload, qos, retained, dup, packetId, properties)
     }
 
