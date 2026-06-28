@@ -95,3 +95,76 @@ func testConnectOptionsV5Properties() {
     }
     @Expect(foundSessionExpiry, true)
 }
+
+// ============ contentType + willDelay 编解码 ============
+
+@Test
+func testPropertiesContentType() {
+    let props = MqttProperties()
+    props.contentType = Some("text/plain")
+    let encoded = props.encode()
+    @Expect(encoded.size > Int64(0), true)
+
+    let decoded = MqttProperties.decode(encoded)
+    @Expect(decoded.contentType.isSome(), true)
+    @Expect(decoded.contentType.getOrThrow(), "text/plain")
+}
+
+@Test
+func testPropertiesWillDelayInterval() {
+    let props = MqttProperties()
+    props.willDelayInterval = Some(120)
+    let encoded = props.encode()
+    @Expect(encoded.size > Int64(0), true)
+
+    let decoded = MqttProperties.decode(encoded)
+    @Expect(decoded.willDelayInterval.isSome(), true)
+    @Expect(decoded.willDelayInterval.getOrThrow(), Int64(120))
+}
+
+@Test
+func testPropertiesContentTypeAndWillDelayRoundtrip() {
+    let props = MqttProperties()
+    props.contentType = Some("application/json")
+    props.willDelayInterval = Some(30)
+    let encoded = props.encode()
+
+    let decoded = MqttProperties.decode(encoded)
+    @Expect(decoded.contentType.isSome(), true)
+    @Expect(decoded.contentType.getOrThrow(), "application/json")
+    @Expect(decoded.willDelayInterval.isSome(), true)
+    @Expect(decoded.willDelayInterval.getOrThrow(), Int64(30))
+}
+
+// ============ reasonString / auth 编解码 ============
+
+@Test
+func testPropertiesReasonString() {
+    let props = MqttProperties()
+    props.reasonString = Some("Connection closed by server")
+    let encoded = props.encode()
+    @Expect(encoded.size > Int64(0), true)
+
+    let decoded = MqttProperties.decode(encoded)
+    @Expect(decoded.reasonString.isSome(), true)
+    @Expect(decoded.reasonString.getOrThrow(), "Connection closed by server")
+}
+
+@Test
+func testPropertiesAuthMethodAndData() {
+    let props = MqttProperties()
+    props.authenticationMethod = Some("SCRAM-SHA-256")
+    let authBytes = Array<UInt8>(4, repeat: UInt8(0))
+    authBytes[0] = 1; authBytes[1] = 2; authBytes[2] = 3; authBytes[3] = 4
+    props.authenticationData = Some(authBytes)
+    let encoded = props.encode()
+
+    let decoded = MqttProperties.decode(encoded)
+    @Expect(decoded.authenticationMethod.isSome(), true)
+    @Expect(decoded.authenticationMethod.getOrThrow(), "SCRAM-SHA-256")
+    @Expect(decoded.authenticationData.isSome(), true)
+    let decodedData = decoded.authenticationData.getOrThrow()
+    @Expect(decodedData.size, Int64(4))
+    @Expect(decodedData[0], UInt8(1))
+    @Expect(decodedData[3], UInt8(4))
+}

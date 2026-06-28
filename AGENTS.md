@@ -32,20 +32,30 @@
 
 ### 协议支持策略
 
-- **当前优先**: MQTT v3.1.1（存量市场最大，协议更简单）
-- **未来计划**: MQTT v5.0（新增 Properties、共享订阅等特性）
+- **v3.1.1**: 完整支持（CONNECT/CONNACK/PUBLISH QoS0-2/PUBACK/PUBREC/PUBREL/PUBCOMP/SUBSCRIBE/SUBACK/UNSUBSCRIBE/UNSUBACK/PINGREQ/PINGRESP/DISCONNECT）
+- **v5.0**: 完整支持（新增 Properties、AUTH、Topic Alias、增强 Reason Codes、Will Properties）
 - **兼容性**: 通过 `ConnectOptions.protocolVersion` 字段切换版本
 
-### 已实现功能（v3.1.1）
+### 已实现功能
 
-- CONNECT/CONNACK 包编解码
-- PUBLISH 包编解码 (QoS 0)
-- SUBSCRIBE/SUBACK 包编解码
-- PINGREQ/PINGRESP 包编解码
-- DISCONNECT 包编解码
-- TCP 传输层基础实现
-- 异步消息接收 (Thread-based)
-- 基础回调机制 (onConnect, onMessage, onError, onDisconnect)
+- CONNECT/CONNACK 包编解码（v3.1.1 + v5.0）
+- PUBLISH 包编解码 (QoS 0/1/2)，含 DUP/Retain 标志位
+- SUBSCRIBE/SUBACK 包编解码（v3.1.1 + v5.0 含订阅选项字节）
+- UNSUBSCRIBE/UNSUBACK 包编解码
+- PINGREQ/PINGRESP 包编解码 + Keep Alive 超时检测
+- DISCONNECT 包编解码（v3.1.1 简化格式 + v5.0 ReasonCode/Properties 格式）
+- PUBACK/PUBREC/PUBREL/PUBCOMP 编解码（QoS 1/2 四次握手）
+- AUTH 包编解码（v5.0 only）
+- TCP + TLS + WebSocket 传输层
+- 异步消息接收 (spawn-based)
+- 回调机制 (onConnect, onMessage, onError, onDisconnect, per-subscription 回调)
+- 主题通配符匹配（+ / # / $SYS 过滤 / 空层级拒绝）
+- Inflight 消息存储 + 超时重传（DUP 标志，最多 3 次）
+- 自动重连（指数退避，会话恢复，in-flight 重传）
+- Packet ID 防复用（in-flight 跳过）
+- v5.0 Properties 编解码（27 种属性）
+- v5.0 Topic Alias 接收侧解析
+- 线程安全（Mutex + synchronized 保护全部共享状态）
 
 ### 约束边界
 
@@ -81,18 +91,26 @@
 ```
 src/
 ├── main.cj                     # package mqtt （入口）
+├── basic_test.cj               # 基础类型单元测试
 ├── client/                     # package mqtt.client（所有客户端代码）
-│   ├── mqtt_client.cj         # MqttClient 主类
-│   ├── session.cj             # 会话管理
-│   └── options.cj             # 连接选项
+│   └── mqtt_client.cj         # MqttClient 主类
 ├── protocol/                   # package mqtt.protocol
-│   ├── types.cj              # 协议类型定义
-│   ├── encoder.cj            # 编码器（支持 v3.1.1 和 v5.0）
-│   └── decoder.cj            # 解码器
-├── transport/                 # package mqtt.transport
-│   └── tcp_transport.cj      # TCP 传输层
-└── store/                     # package mqtt.store
-    └── message_store.cj       # 消息存储（QoS 1/2）
+│   ├── types.cj                # 协议类型定义 + Properties
+│   ├── codec.cj                # 编解码抽象基类（Template Method）
+│   ├── v311_codec.cj           # MQTT v3.1.1 编解码
+│   ├── v50_codec.cj            # MQTT v5.0 编解码
+│   ├── encoder.cj              # ByteArrayOutputStream 辅助
+│   ├── decoder.cj              # MqttDecoder + ByteArrayInputStream
+│   ├── results.cj              # 统一解析结果类型
+│   ├── topic_matcher.cj        # 主题通配符匹配
+│   ├── encoding_test.cj        # 编解码单元测试
+│   ├── properties_test.cj      # Properties 单元测试
+│   └── topic_matcher_test.cj   # 主题匹配单元测试
+├── transport/                  # package mqtt.transport
+│   ├── tcp_transport.cj        # TCP/TLS 传输层
+│   └── ws_transport.cj         # WebSocket 传输层
+└── store/                      # package mqtt.store
+    └── message_store.cj        # 消息存储（QoS 1/2）
 ```
 
 - 文件命名：全小写 + 下划线分隔（如 `mqtt_client.cj`、`tcp_transport.cj`）
@@ -270,8 +288,8 @@ transport.send(packet);  // 忽略返回值
 ## 六、测试规范
 
 - 测试类使用 `@Test` 属性
-- 测试方法使用 `@TestCase` 属性
-- 断言使用 `assert()` 函数
+- 测试方法使用 `@Test` 属性
+- 断言使用 `@Expect(actual, expected)` 宏
 - 测试方法名：`操作名_场景_期望结果` 或 `encodeXxx` / `decodeXxx`
 - 集成测试使用真实 Mosquitto broker（Docker）
 

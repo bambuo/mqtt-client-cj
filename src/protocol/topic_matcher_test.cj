@@ -75,4 +75,24 @@ func testIsValidTopic() {
 func testIsInvalidTopic() {
     @Expect(TopicMatcher.isValidTopic(topic: "test/+"), false)
     @Expect(TopicMatcher.isValidTopic(topic: "test/#"), false)
+    @Expect(TopicMatcher.isValidTopic(topic: ""), false)       // 空串拒绝
+}
+
+// ============ 空层级 / 空串拒绝测试 ============
+
+@Test
+func testPlusRejectsEmptyTopicLevel() {
+    // + 不应匹配空层级（MQTT 规范要求 + 匹配恰好一个非空层级）
+    @Expect(TopicMatcher.matches(topic: "a//c", topicFilter: "a/+/c"), false)
+    @Expect(TopicMatcher.matches(topic: "a/b/c", topicFilter: "a/+/c"), true)
+}
+
+@Test
+func testEmptyTopicFilterRejected() {
+    @Expect(TopicMatcher.isValidTopicFilter(topicFilter: ""), false)
+}
+
+@Test
+func testEmptyTopicRejected() {
+    @Expect(TopicMatcher.isValidTopic(topic: ""), false)
 }

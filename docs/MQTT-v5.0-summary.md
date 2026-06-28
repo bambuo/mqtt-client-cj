@@ -159,9 +159,9 @@ Bit:  7      6      5      4      3   2   1      0
 **Fixed Header**: `0x30` + Flags + Remaining Length
 
 **Flags**:
-- Bit 3,2: QoS Level
-- Bit 1: Retain
-- Bit 0: DUP (重传标志)
+- Bit 3: DUP (重传标志)
+- Bit 2,1: QoS Level
+- Bit 0: Retain
 
 **Variable Header**:
 1. Topic Name (长度 + 内容)
@@ -415,28 +415,25 @@ MQTT v5.0 为大多数包引入了 Reason Code。
 
 ## 实现检查清单
 
-### Phase 1: MVP
+### 全部已实现
 
-- [x] CONNECT/CONNACK 编码/解码
-- [x] PUBLISH (QoS 0) 编码/解码
-- [x] SUBSCRIBE/SUBACK 编码/解码
-- [x] DISCONNECT 编码/解码
-- [x] TCP 传输层
-
-### Phase 2: 核心功能
-
-- [ ] PUBLISH QoS 1 + PUBACK
-- [ ] SUBSCRIBE 通配符匹配
-- [ ] Keep Alive (PINGREQ/PINGRESP)
-- [ ] UNSUBSCRIBE/UNSUBACK
-
-### Phase 3: 完整功能
-
-- [ ] QoS 2 (PUBREC/PUBREL/PUBCOMP)
-- [ ] Will Message
-- [ ] Retained 消息
-- [ ] 持久会话
-- [ ] Properties 支持
+- [x] CONNECT/CONNACK 编码/解码（v3.1.1 + v5.0）
+- [x] PUBLISH (QoS 0/1/2) 编码/解码，含 DUP/Retain 标志位
+- [x] SUBSCRIBE/SUBACK 编码/解码（v5.0 订阅选项字节 QoS<<1）
+- [x] UNSUBSCRIBE/UNSUBACK 编码/解码
+- [x] DISCONNECT 编码/解码（v3.1.1 + v5.0 ReasonCode/Properties）
+- [x] PUBACK/PUBREC/PUBREL/PUBCOMP 编解码（QoS 1/2 四次握手）
+- [x] PINGREQ/PINGRESP + Keep Alive 超时检测
+- [x] AUTH 编码/解码（v5.0 only）
+- [x] TCP + TLS + WebSocket 传输层
+- [x] 主题通配符匹配（+ / # / $SYS / 空层级拒绝）
+- [x] Will Message（遗嘱消息，含 v5.0 Will Properties）
+- [x] Retained 消息
+- [x] 持久会话（cleanStart=false, session present 恢复）
+- [x] v5.0 Properties 编解码（27 种属性）
+- [x] v5.0 Topic Alias 接收侧解析
+- [x] 自动重连（指数退避，in-flight 重传）
+- [x] 线程安全（Mutex + synchronized）
 
 ---
 
